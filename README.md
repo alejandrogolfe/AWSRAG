@@ -1,27 +1,27 @@
 # 🤖 RAG System with AWS Bedrock + Aurora PostgreSQL
 
-Sistema completo de **Retrieval-Augmented Generation (RAG)** que permite hacer preguntas sobre tus documentos usando Claude de Bedrock. El sistema procesa documentos automáticamente cuando los subes a S3 y mantiene una base de datos vectorial sincronizada.
+Complete **Retrieval-Augmented Generation (RAG)** system that lets you ask questions about your documents using Claude from Bedrock. The system automatically processes documents when you upload them to S3 and maintains a synchronized vector database.
 
 ---
 
-## 🎯 ¿Qué hace?
+## 🎯 What does it do?
 
-1. **Subes un documento** (PDF, DOCX, TXT) a S3
-2. **Lambda Processor** automáticamente:
-   - Extrae el texto
-   - Lo divide en chunks (fragmentos)
-   - Genera embeddings con **Bedrock Titan Embeddings**
-   - Los guarda en **Aurora Postgres + pgvector**
-3. **Haces una pregunta** via API
-4. **Lambda Query** automáticamente:
-   - Convierte tu pregunta en embedding
-   - Busca los chunks más relevantes (similarity search)
-   - Le pasa el contexto a **Claude (Bedrock)**
-   - Claude responde basándose SOLO en tus documentos
+1. **You upload a document** (PDF, DOCX, TXT) to S3
+2. **Lambda Processor** automatically:
+   - Extracts the text
+   - Splits it into chunks
+   - Generates embeddings with **Bedrock Titan Embeddings**
+   - Stores them in **Aurora Postgres + pgvector**
+3. **You ask a question** via API
+4. **Lambda Query** automatically:
+   - Converts your question into an embedding
+   - Searches for the most relevant chunks (similarity search)
+   - Passes the context to **Claude (Bedrock)**
+   - Claude responds based ONLY on your documents
 
 ---
 
-## 🏗️ Arquitectura
+## 🏗️ Architecture
 
 ```
 ┌─────────────┐
@@ -50,105 +50,105 @@ Sistema completo de **Retrieval-Augmented Generation (RAG)** que permite hacer p
                              └──────────────┘
 ```
 
-### Componentes
+### Components
 
-| Componente | Función |
+| Component | Purpose |
 |---|---|
-| **S3** | Almacenamiento de documentos (`docs/`) |
-| **Lambda Processor** | Procesamiento automático: chunking + embeddings |
-| **Aurora Serverless v2** | Base de datos vectorial (Postgres + pgvector) |
-| **Lambda Query API** | Endpoint REST para hacer preguntas |
-| **Bedrock Titan** | Generación de embeddings (vectores) |
-| **Bedrock Claude** | LLM para responder preguntas con contexto |
+| **S3** | Document storage (`docs/`) |
+| **Lambda Processor** | Automatic processing: chunking + embeddings |
+| **Aurora Serverless v2** | Vector database (Postgres + pgvector) |
+| **Lambda Query API** | REST endpoint for asking questions |
+| **Bedrock Titan** | Embedding generation (vectors) |
+| **Bedrock Claude** | LLM to answer questions with context |
 
 ---
 
 ## 🚀 Deployment
 
-### Prerequisitos
-- AWS CLI configurado
-- Docker instalado
-- Cuenta AWS con acceso a Bedrock (activar modelos Claude y Titan en la región)
+### Prerequisites
+- AWS CLI configured
+- Docker installed
+- AWS account with Bedrock access (enable Claude and Titan models in your region)
 
-### Activar modelos en Bedrock
+### Enable models in Bedrock
 ```
 AWS Console → Bedrock → Model access → Request access:
   ✓ Claude 3.5 Sonnet v2
   ✓ Titan Embeddings v2
 ```
 
-### Deployment
+### Deploy
 ```bash
 cd rag
 chmod +x deploy_rag.sh
 ./deploy_rag.sh
 ```
 
-**Tiempo estimado:** 10-15 minutos (Aurora tarda ~5min en crearse)
+**Estimated time:** 10-15 minutes (Aurora takes ~5min to create)
 
-El script crea:
-- ✅ S3 bucket para documentos
-- ✅ Aurora Postgres Serverless v2 con pgvector
-- ✅ 2 Lambdas (processor + query) como container images
-- ✅ Roles IAM con permisos mínimos
+The script creates:
+- ✅ S3 bucket for documents
+- ✅ Aurora Postgres Serverless v2 with pgvector
+- ✅ 2 Lambdas (processor + query) as container images
+- ✅ IAM roles with least-privilege permissions
 - ✅ S3 event trigger
-- ✅ Function URL pública para la API
+- ✅ Public Function URL for the API
 
 ---
 
-## 📚 Uso
+## 📚 Usage
 
-### 1. Subir documentos
+### 1. Upload documents
 ```bash
-# Sube un PDF
-aws s3 cp documento.pdf s3://rag-system-docs/docs/documento.pdf
+# Upload a PDF
+aws s3 cp document.pdf s3://rag-system-docs/docs/document.pdf
 
-# Sube múltiples archivos
-aws s3 cp carpeta/ s3://rag-system-docs/docs/ --recursive
+# Upload multiple files
+aws s3 cp folder/ s3://rag-system-docs/docs/ --recursive
 ```
 
-**Formatos soportados:** PDF, DOCX, TXT
+**Supported formats:** PDF, DOCX, TXT
 
-### 2. Monitorear procesamiento
+### 2. Monitor processing
 ```bash
-# Ver logs del processor
+# View processor logs
 aws logs tail /aws/lambda/rag-system-processor --follow
 
-# Deberías ver:
-# Processing file: s3://rag-system-docs/docs/documento.pdf
+# You should see:
+# Processing file: s3://rag-system-docs/docs/document.pdf
 # Extracted 15000 characters
 # Created 23 chunks
 # Processing chunk 1/23
 # Successfully processed 23 chunks
 ```
 
-### 3. Hacer preguntas
+### 3. Ask questions
 
-El deploy te da una **Function URL** (guarda el `.rag-deployment-config`):
+The deploy gives you a **Function URL** (saved in `.rag-deployment-config`):
 
 ```bash
 # Via curl
-curl -X POST https://[tu-function-url].lambda-url.eu-west-1.on.aws/ \
+curl -X POST https://[your-function-url].lambda-url.eu-west-1.on.aws/ \
   -H 'Content-Type: application/json' \
-  -d '{"question": "¿Cuál es el tema principal del documento?"}'
+  -d '{"question": "What is the main topic of the document?"}'
 
 # Via Python
 import requests
 response = requests.post(
-    'https://[tu-function-url].lambda-url.eu-west-1.on.aws/',
-    json={'question': '¿Qué dice sobre precios?'}
+    'https://[your-function-url].lambda-url.eu-west-1.on.aws/',
+    json={'question': 'What does it say about pricing?'}
 )
 print(response.json()['answer'])
 ```
 
-**Respuesta:**
+**Response:**
 ```json
 {
-  "question": "¿Cuál es el tema principal?",
-  "answer": "Basándome en el contexto proporcionado, el documento trata sobre...",
+  "question": "What is the main topic?",
+  "answer": "Based on the provided context, the document discusses...",
   "sources": [
     {
-      "filename": "docs/documento.pdf",
+      "filename": "docs/document.pdf",
       "chunk_index": 3,
       "similarity": 0.87
     }
@@ -156,59 +156,59 @@ print(response.json()['answer'])
 }
 ```
 
-### 4. Actualizar documentos
+### 4. Update documents
 
-Si subes un archivo con el **mismo nombre pero contenido diferente**, el sistema:
-- ✅ Detecta el cambio (hash MD5)
-- ✅ Borra los chunks antiguos
-- ✅ Procesa y guarda los nuevos
-- ✅ El RAG se actualiza automáticamente
+If you upload a file with the **same name but different content**, the system:
+- ✅ Detects the change (MD5 hash)
+- ✅ Deletes old chunks
+- ✅ Processes and stores new ones
+- ✅ RAG updates automatically
 
 ---
 
-## 🔧 Configuración avanzada
+## 🔧 Advanced configuration
 
-### Cambiar tamaño de chunks
-Edita `processor/processor.py`:
+### Change chunk size
+Edit `processor/processor.py`:
 ```python
-def chunk_text(text, chunk_size=1000, chunk_overlap=200):  # ← ajusta aquí
+def chunk_text(text, chunk_size=1000, chunk_overlap=200):  # ← adjust here
 ```
 
-### Cambiar número de chunks recuperados
-Edita `query/query.py`:
+### Change number of retrieved chunks
+Edit `query/query.py`:
 ```python
-def similarity_search(query_embedding, top_k=5):  # ← ajusta top_k
+def similarity_search(query_embedding, top_k=5):  # ← adjust top_k
 ```
 
-O pasa en la request:
+Or pass in the request:
 ```bash
 curl -X POST [url] -d '{"question": "...", "top_k": 10}'
 ```
 
-### Cambiar modelo de Claude
-Edita `query/query.py`:
+### Change Claude model
+Edit `query/query.py`:
 ```python
-modelId='anthropic.claude-3-5-sonnet-20241022-v2:0'  # ← cambia modelo
+modelId='anthropic.claude-3-5-sonnet-20241022-v2:0'  # ← change model
 ```
 
 ---
 
-## 💾 Acceso directo a la base de datos
+## 💾 Direct database access
 
 ```bash
-# Conectar con psql
+# Connect with psql
 psql -h [DB_ENDPOINT] -U ragadmin -d ragdb
 
-# Ver todos los documentos procesados
+# View all processed documents
 SELECT filename, chunk_count FROM processed_files;
 
-# Ver chunks de un documento
+# View chunks from a document
 SELECT chunk_index, LEFT(chunk_text, 100) 
 FROM embeddings 
-WHERE filename = 'docs/documento.pdf' 
+WHERE filename = 'docs/document.pdf' 
 ORDER BY chunk_index;
 
-# Buscar por similaridad manualmente
+# Manual similarity search
 SELECT chunk_text, 1 - (embedding <=> '[0.1,0.2,...]'::vector) as similarity
 FROM embeddings
 ORDER BY embedding <=> '[0.1,0.2,...]'::vector
@@ -217,80 +217,80 @@ LIMIT 5;
 
 ---
 
-## 📊 Costos estimados
+## 📊 Estimated costs
 
-Para **1000 documentos procesados** + **1000 queries/mes**:
+For **1000 documents processed** + **1000 queries/month**:
 
-| Servicio | Costo aprox. |
+| Service | Approx. cost |
 |---|---|
-| Aurora Serverless v2 (0.5 ACU mínimo) | ~$43/mes |
+| Aurora Serverless v2 (0.5 ACU minimum) | ~$43/month |
 | Lambda processor (900s timeout, 1GB) | ~$2 |
-| Lambda query (60s promedio, 512MB) | ~$0.50 |
-| Bedrock Titan Embeddings | ~$0.13 (1M tokens input) |
-| Bedrock Claude 3.5 Sonnet | ~$15 (500k tokens in, 100k out) |
-| **TOTAL** | **~$60/mes** |
+| Lambda query (60s average, 512MB) | ~$0.50 |
+| Bedrock Titan Embeddings | ~$0.13 (1M input tokens) |
+| Bedrock Claude 3.5 Sonnet | ~$15 (500k in, 100k out) |
+| **TOTAL** | **~$60/month** |
 
 ---
 
-## 🧹 Limpieza
+## 🧹 Cleanup
 
 ```bash
 chmod +x clean_rag.sh
 ./clean_rag.sh
 ```
 
-**⚠️ ADVERTENCIA:** Esto borra TODO (S3, Lambda, Aurora, roles). Los datos no son recuperables.
+**⚠️ WARNING:** This deletes EVERYTHING (S3, Lambda, Aurora, roles). Data is not recoverable.
 
 ---
 
-## 🎓 Aspectos didácticos
+## 🎓 Educational aspects
 
-Este proyecto te permite aprender:
+This project lets you learn:
 
-1. **Vector embeddings** - Cómo se convierten textos en vectores numéricos
-2. **Similarity search** - Búsqueda por distancia coseno en espacio vectorial
-3. **RAG pattern** - Retrieval-Augmented Generation desde cero
+1. **Vector embeddings** - How texts are converted to numerical vectors
+2. **Similarity search** - Cosine distance search in vector space
+3. **RAG pattern** - Retrieval-Augmented Generation from scratch
 4. **Event-driven architecture** - S3 events → Lambda triggers
 5. **Serverless databases** - Aurora Serverless v2 + pgvector
-6. **Container images en Lambda** - Cómo empaquetar dependencias pesadas
-7. **Bedrock integration** - Uso de modelos foundation (Titan, Claude)
+6. **Container images in Lambda** - How to package heavy dependencies
+7. **Bedrock integration** - Using foundation models (Titan, Claude)
 
-Cada componente es inspeccionable y modificable para experimentar.
+Each component is inspectable and modifiable for experimentation.
 
 ---
 
 ## 🔍 Debugging
 
-### Lambda no se dispara
+### Lambda doesn't trigger
 ```bash
-# Verificar trigger S3
+# Verify S3 trigger
 aws s3api get-bucket-notification-configuration --bucket rag-system-docs
 
-# Verificar permisos
+# Verify permissions
 aws lambda get-policy --function-name rag-system-processor
 ```
 
-### Error de conexión a base de datos
+### Database connection error
 ```bash
-# Verificar que Lambda está en la VPC correcta
+# Verify Lambda is in correct VPC
 aws lambda get-function-configuration --function-name rag-system-processor
 
-# Verificar security group permite puerto 5432
+# Verify security group allows port 5432
 aws ec2 describe-security-groups --group-ids [SG_ID]
 ```
 
-### Embeddings no se generan
+### Embeddings not generated
 ```bash
-# Verificar acceso a Bedrock
+# Verify Bedrock access
 aws bedrock list-foundation-models --region eu-west-1
 
-# Ver logs detallados
+# View detailed logs
 aws logs tail /aws/lambda/rag-system-processor --follow --format short
 ```
 
 ---
 
-## 📖 Referencias
+## 📖 References
 
 - [pgvector Documentation](https://github.com/pgvector/pgvector)
 - [Bedrock User Guide](https://docs.aws.amazon.com/bedrock/)
