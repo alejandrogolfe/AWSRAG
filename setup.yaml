@@ -1,0 +1,150 @@
+# =============================================================================
+# RAG System — Configuración principal
+# =============================================================================
+# Edita este archivo para cambiar el comportamiento del sistema sin tocar código.
+# Todas las claves pueden sobreescribirse con variables de entorno.
+
+# -----------------------------------------------------------------------------
+# LLM
+# -----------------------------------------------------------------------------
+llm:
+  model: "gpt-4o-mini"           # gpt-4o | gpt-4o-mini | gpt-3.5-turbo
+  temperature: 0.0               # 0.0 = determinista, 1.0 = creativo
+  max_tokens: 1024
+
+# -----------------------------------------------------------------------------
+# Embeddings
+# -----------------------------------------------------------------------------
+embeddings:
+  model: "text-embedding-3-small"   # text-embedding-3-small | text-embedding-3-large | text-embedding-ada-002
+
+# -----------------------------------------------------------------------------
+# Vectorstore
+# -----------------------------------------------------------------------------
+vectorstore:
+  backend: "chroma"              # chroma | pgvector
+  path: "./vectorstore"          # solo para chroma (local)
+  collection_name: "rag_docs"
+  # NOTA: parent_document crea automáticamente una segunda colección
+  # llamada "<collection_name>_parents" para almacenar los chunks padre.
+
+  # PGVector / RDS (solo si backend = pgvector)
+  pgvector:
+    host: "localhost"
+    port: 5432
+    database: "rag_db"
+    user: "postgres"
+    password: ""
+
+# -----------------------------------------------------------------------------
+# Retrieval
+# -----------------------------------------------------------------------------
+retrieval:
+  search_type: "mmr"             # similarity | mmr | similarity_score_threshold
+  k: 4                           # chunks devueltos al LLM
+  fetch_k: 12                    # candidatos pre-filtro para MMR (>= k)
+  score_threshold: 0.7           # solo si search_type = similarity_score_threshold
+
+# -----------------------------------------------------------------------------
+# Chunking
+# -----------------------------------------------------------------------------
+# Estrategias disponibles:
+#
+#   recursive         → Split jerárquico clásico por caracteres con fallback.
+#                       Bueno para texto genérico. Punto de partida seguro.
+#
+#   markdown_header   → Respeta la estructura H1/H2/H3 del documento.
+#                       Ideal cuando los docs son Markdown bien formateado.
+#
+#   sentence_window   → Cada chunk es 1 frase; guarda N frases de contexto
+#                       en metadata para inyectarlas al LLM.
+#                       Mejora la precisión en retrieval de hechos concretos.
+#
+#   semantic          → Agrupa frases por similitud semántica (usa embeddings).
+#                       El chunking más costoso pero el más "inteligente".
+#                       Requiere: pip install langchain-experimental
+#
+#   parent_document   → Indexa chunks pequeños (hijos) para retrieval preciso,
+#                       pero recupera el chunk padre más grande para el LLM.
+#                       Resuelve el trade-off precisión vs. contexto.
+#                       Crea dos colecciones: principal (hijos) + _parents (padres).
+#
+#   proposition       → Usa un LLM para convertir cada chunk en proposiciones
+#                       atómicas autocontenidas antes de indexar.
+#                       Muy alta precisión en retrieval; más caro en indexación.
+#                       Basado en el paper "Dense X Retrieval" (Cardiff, 2023).
+#
+# Activa UNA estrategia cambiando el campo `strategy`.
+# -----------------------------------------------------------------------------
+chunking:
+  strategy: "recursive"          # recursive | markdown_header | sentence_window | semantic | parent_document | proposition
+
+  # -- recursive ---------------------------------------------------------------
+  recursive:
+    chunk_size: 1000
+    chunk_overlap: 150
+    separators:
+      - "\n\n"
+      - "\n"
+      - ". "
+      - " "
+      - ""
+
+  # -- markdown_header ---------------------------------------------------------
+  markdown_header:
+    chunk_size: 1000
+    chunk_overlap: 100
+    headers_to_split_on:
+      - ["#", "h1"]
+      - ["##", "h2"]
+      - ["###", "h3"]
+    strip_headers: false
+
+  # -- sentence_window ---------------------------------------------------------
+  sentence_window:
+    window_size: 3               # frases de contexto a cada lado de la frase central
+
+  # -- semantic ----------------------------------------------------------------
+  semantic:
+    breakpoint_threshold_type: "percentile"   # percentile | standard_deviation | interquartile
+    breakpoint_threshold_amount: 90
+
+  # -- parent_document ---------------------------------------------------------
+  parent_document:
+    # Chunks padre: grandes, dan contexto al LLM
+    parent_chunk_size: 2000
+    parent_chunk_overlap: 200
+    # Chunks hijo: pequeños, dan precisión al retriever
+    child_chunk_size: 400
+    child_chunk_overlap: 50
+    # Regla general: parent_chunk_size debe ser 4-6x child_chunk_size
+
+  # -- proposition -------------------------------------------------------------
+  proposition:
+    # Tamaño del chunk base antes de pasar al LLM para extraer proposiciones
+    base_chunk_size: 1500
+    base_chunk_overlap: 100
+    # Modelo usado para generar proposiciones (puede ser más barato que el LLM principal)
+    # gpt-4o-mini es suficiente para esta tarea y mantiene el coste bajo
+    proposition_model: "gpt-4o-mini"
+    # Advertencia: esta estrategia hace 1 llamada al LLM por cada chunk base.
+    # Con 100 chunks base y gpt-4o-mini el coste es ~$0.01-0.05.
+
+# -----------------------------------------------------------------------------
+# Documentos
+# -----------------------------------------------------------------------------
+docs:
+  directory: "/app/web_scrapper/rag_data"
+  supported_extensions:
+    - "**/*.txt"
+    - "**/*.md"
+    - "**/*.pdf"
+  silent_errors: true
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging:
+  level: "INFO"                  # DEBUG | INFO | WARNING | ERROR
+  show_sources: true
+  max_fragment_length: 200

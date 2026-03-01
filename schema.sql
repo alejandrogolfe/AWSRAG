@@ -1,30 +1,34 @@
--- Enable pgvector extension for vector similarity search
+-- =============================================================================
+-- Schema para langchain PGVector
+-- Langchain crea estas tablas automáticamente, pero las pre-creamos aquí
+-- para poder añadir los índices de rendimiento desde el primer momento.
+-- =============================================================================
+
+-- Habilitar extensión pgvector
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Main embeddings table
-CREATE TABLE IF NOT EXISTS embeddings (
-    id SERIAL PRIMARY KEY,
-    chunk_text TEXT NOT NULL,
-    embedding vector(1024),  -- Titan Embeddings v2 produces 1024-dimensional vectors
-    filename TEXT NOT NULL,
-    chunk_index INTEGER NOT NULL,
-    file_hash TEXT,  -- MD5 hash to detect file changes
-    created_at TIMESTAMP DEFAULT NOW()
+-- Tabla de colecciones (langchain la crea con este nombre exacto)
+CREATE TABLE IF NOT EXISTS langchain_pg_collection (
+    name        VARCHAR     NOT NULL,
+    cmetadata   JSON,
+    uuid        UUID PRIMARY KEY
 );
 
--- Index for fast vector similarity search using cosine distance
--- ivfflat is an approximate nearest neighbor algorithm
-CREATE INDEX IF NOT EXISTS embeddings_vector_idx 
-ON embeddings USING ivfflat (embedding vector_cosine_ops)
+-- Tabla de embeddings (langchain la crea con este nombre exacto)
+CREATE TABLE IF NOT EXISTS langchain_pg_embedding (
+    collection_id   UUID        REFERENCES langchain_pg_collection(uuid) ON DELETE CASCADE,
+    embedding       VECTOR(1536),  -- text-embedding-3-small produce 1536 dimensiones
+    document        VARCHAR,
+    cmetadata       JSON,
+    custom_id       VARCHAR,
+    uuid            UUID        PRIMARY KEY
+);
+
+-- Índice de búsqueda vectorial por similitud coseno (ivfflat = ANN aproximado, rápido)
+CREATE INDEX IF NOT EXISTS langchain_pg_embedding_vector_idx
+ON langchain_pg_embedding USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 
--- Index for filtering by filename
-CREATE INDEX IF NOT EXISTS embeddings_filename_idx ON embeddings(filename);
-
--- Table to track processed files (avoid reprocessing)
-CREATE TABLE IF NOT EXISTS processed_files (
-    filename TEXT PRIMARY KEY,
-    file_hash TEXT NOT NULL,
-    processed_at TIMESTAMP DEFAULT NOW(),
-    chunk_count INTEGER
-);
+-- Índice por collection_id para filtrar por colección rápidamente
+CREATE INDEX IF NOT EXISTS langchain_pg_embedding_collection_idx
+ON langchain_pg_embedding (collection_id);

@@ -1,285 +1,219 @@
 #!/bin/bash
+set +e
 
-# Robust cleanup script for RAG system
-# Handles partial deployments and continues on errors
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 echo -e "${RED}========================================${NC}"
 echo -e "${RED} RAG SYSTEM CLEANUP${NC}"
 echo -e "${RED}========================================${NC}"
 echo -e "${RED}WARNING: This will delete ALL resources${NC}"
-echo -e "${RED}This action cannot be undone!${NC}"
 echo ""
 read -p "Are you sure? (type 'DELETE' to confirm): " confirm
+[ "$confirm" != "DELETE" ] && echo "Cleanup cancelled" && exit 0
 
-if [ "$confirm" != "DELETE" ]; then
-    echo "Cleanup cancelled"
-    exit 0
-fi
-
-# Try to load config, but continue if it doesn't exist
 if [ -f .rag-deployment-config ]; then
     source .rag-deployment-config
-    echo -e "${GREEN}Loaded config from .rag-deployment-config${NC}"
+    echo -e "${GREEN}Loaded config${NC}"
 else
-    echo -e "${YELLOW}No .rag-deployment-config found, using default names${NC}"
     export AWS_REGION="${AWS_REGION:-eu-west-1}"
     export PROJECT_NAME="${PROJECT_NAME:-rag-system-alejandrogolfe}"
     export BUCKET_NAME="${BUCKET_NAME:-${PROJECT_NAME}-docs}"
     export LAMBDA_PROCESSOR="${LAMBDA_PROCESSOR:-${PROJECT_NAME}-processor}"
-    export LAMBDA_QUERY="${LAMBDA_QUERY:-${PROJECT_NAME}-query-api}"
     export DB_INSTANCE_NAME="${DB_INSTANCE_NAME:-${PROJECT_NAME}-postgres}"
+    export EC2_ROLE_NAME="${EC2_ROLE_NAME:-${PROJECT_NAME}-ec2-role}"
+    export EC2_INSTANCE_PROFILE="${EC2_INSTANCE_PROFILE:-${PROJECT_NAME}-ec2-profile}"
 fi
 
 export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "")
+[ -z "$AWS_ACCOUNT_ID" ] && echo -e "${RED}Error: AWS CLI no configurado${NC}" && exit 1
 
-if [ -z "$AWS_ACCOUNT_ID" ]; then
-    echo -e "${RED}Error: Cannot get AWS Account ID. Is AWS CLI configured?${NC}"
-    exit 1
-fi
+echo -e "\n${BLUE}Region: ${AWS_REGION} | Project: ${PROJECT_NAME}${NC}\n"
 
-echo -e "\n${BLUE}Region: ${AWS_REGION}${NC}"
-echo -e "${BLUE}Project: ${PROJECT_NAME}${NC}"
-echo ""
-
-# Function to safely delete a resource
 safe_delete() {
-    local description=$1
-    local command=$2
-    
-    echo -e "\n${BLUE}${description}...${NC}"
-    if eval "$command" 2>/dev/null; then
-        echo -e "${GREEN}✓ ${description} completed${NC}"
-        return 0
-    else
-        echo -e "${YELLOW}⚠ ${description} - resource not found or already deleted${NC}"
-        return 1
-    fi
+    local desc=$1; local cmd=$2
+    echo -e "\n${BLUE}${desc}...${NC}"
+    eval "$cmd" 2>/dev/null && echo -e "${GREEN}✓ ${desc}${NC}" || echo -e "${YELLOW}⚠ Ya eliminado o no encontrado${NC}"
 }
 
 # ============================================================
-# 1. DELETE LAMBDA FUNCTION URLs (must be before Lambda deletion)
+# 1. LAMBDA FUNCTION URL (si existía de versión anterior)
 # ============================================================
 echo -e "\n${BLUE}===== Step 1: Lambda Function URLs =====${NC}"
-
-safe_delete "Deleting query Lambda function URL" \
-    "aws lambda delete-function-url-config --function-name ${LAMBDA_QUERY} --region ${AWS_REGION}"
+safe_delete "Eliminar function URL (si existe)" \
+    "aws lambda delete-function-url-config --function-name ${LAMBDA_PROCESSOR} --region ${AWS_REGION}"
 
 # ============================================================
-# 2. DELETE S3 NOTIFICATION CONFIGURATION
+# 2. S3 NOTIFICATION
 # ============================================================
-echo -e "\n${BLUE}===== Step 2: S3 Event Notifications =====${NC}"
-
-safe_delete "Removing S3 notification configuration" \
+echo -e "\n${BLUE}===== Step 2: S3 Notifications =====${NC}"
+safe_delete "Eliminar S3 notification" \
     "aws s3api put-bucket-notification-configuration --bucket ${BUCKET_NAME} --notification-configuration '{}' --region ${AWS_REGION}"
 
 # ============================================================
-# 3. DELETE LAMBDA FUNCTIONS
+# 3. LAMBDA PROCESSOR
 # ============================================================
-echo -e "\n${BLUE}===== Step 3: Lambda Functions =====${NC}"
-
-safe_delete "Deleting processor Lambda" \
+echo -e "\n${BLUE}===== Step 3: Lambda Processor =====${NC}"
+safe_delete "Eliminar Lambda processor" \
     "aws lambda delete-function --function-name ${LAMBDA_PROCESSOR} --region ${AWS_REGION}"
 
-safe_delete "Deleting query Lambda" \
-    "aws lambda delete-function --function-name ${LAMBDA_QUERY} --region ${AWS_REGION}"
-
-# Wait for Lambda ENIs to be cleaned up (important for VPC resources)
-echo -e "${YELLOW}Waiting 30s for Lambda ENIs to be cleaned up...${NC}"
+echo -e "${YELLOW}Esperando 30s para que Lambda libere ENIs...${NC}"
 sleep 30
 
 # ============================================================
-# 4. DELETE S3 BUCKET
+# 4. S3 BUCKET
 # ============================================================
 echo -e "\n${BLUE}===== Step 4: S3 Bucket =====${NC}"
-
-echo "Emptying bucket..."
-aws s3 rm s3://${BUCKET_NAME} --recursive --region ${AWS_REGION} 2>/dev/null || echo "Bucket empty or not found"
-
-safe_delete "Deleting S3 bucket" \
+echo "Vaciando bucket..."
+aws s3 rm s3://${BUCKET_NAME} --recursive --region ${AWS_REGION} 2>/dev/null || true
+safe_delete "Eliminar S3 bucket" \
     "aws s3 rb s3://${BUCKET_NAME} --region ${AWS_REGION}"
 
 # ============================================================
-# 5. DELETE ECR REPOSITORIES
+# 5. ECR REPOSITORY
 # ============================================================
-echo -e "\n${BLUE}===== Step 5: ECR Repositories =====${NC}"
-
-safe_delete "Deleting processor ECR repository" \
+echo -e "\n${BLUE}===== Step 5: ECR Repository =====${NC}"
+safe_delete "Eliminar ECR processor" \
     "aws ecr delete-repository --repository-name ${PROJECT_NAME}-processor --force --region ${AWS_REGION}"
 
-safe_delete "Deleting query ECR repository" \
-    "aws ecr delete-repository --repository-name ${PROJECT_NAME}-query --force --region ${AWS_REGION}"
+# ============================================================
+# 6. EC2 STREAMLIT
+# ============================================================
+echo -e "\n${BLUE}===== Step 6: EC2 Streamlit =====${NC}"
+
+# Buscar EC2 por tag si no está en config
+if [ -z "$EC2_INSTANCE_ID" ] || [ "$EC2_INSTANCE_ID" = "None" ]; then
+  EC2_INSTANCE_ID=$(aws ec2 describe-instances \
+    --filters "Name=tag:Name,Values=${PROJECT_NAME}-streamlit" \
+              "Name=instance-state-name,Values=running,stopped,stopping" \
+    --query 'Reservations[0].Instances[0].InstanceId' \
+    --output text --region ${AWS_REGION} 2>/dev/null)
+fi
+
+if [ ! -z "$EC2_INSTANCE_ID" ] && [ "$EC2_INSTANCE_ID" != "None" ]; then
+  echo "Terminando EC2: ${EC2_INSTANCE_ID}..."
+  aws ec2 terminate-instances --instance-ids ${EC2_INSTANCE_ID} --region ${AWS_REGION} 2>/dev/null
+  aws ec2 wait instance-terminated --instance-ids ${EC2_INSTANCE_ID} --region ${AWS_REGION} 2>/dev/null && \
+    echo -e "${GREEN}✓ EC2 terminada${NC}" || echo -e "${YELLOW}⚠ Timeout esperando EC2${NC}"
+else
+  echo -e "${YELLOW}⚠ EC2 Streamlit no encontrada${NC}"
+fi
+
+# Security Group EC2
+EC2_SG_ID_CLEAN="${EC2_SG_ID:-}"
+if [ -z "$EC2_SG_ID_CLEAN" ] || [ "$EC2_SG_ID_CLEAN" = "None" ]; then
+  EC2_SG_ID_CLEAN=$(aws ec2 describe-security-groups \
+    --filters "Name=group-name,Values=${PROJECT_NAME}-streamlit-sg" \
+    --query 'SecurityGroups[0].GroupId' --output text --region ${AWS_REGION} 2>/dev/null)
+fi
+if [ ! -z "$EC2_SG_ID_CLEAN" ] && [ "$EC2_SG_ID_CLEAN" != "None" ]; then
+  for i in {1..4}; do
+    aws ec2 delete-security-group --group-id ${EC2_SG_ID_CLEAN} --region ${AWS_REGION} 2>/dev/null && \
+      echo -e "${GREEN}✓ EC2 Security Group eliminado${NC}" && break || \
+      { [ $i -lt 4 ] && echo -e "${YELLOW}Reintentando en 10s... ($i/4)${NC}" && sleep 10; }
+  done
+fi
+
+# IAM Instance Profile y Role EC2
+echo "Eliminando IAM Instance Profile y rol EC2..."
+aws iam remove-role-from-instance-profile \
+  --instance-profile-name ${EC2_INSTANCE_PROFILE} \
+  --role-name ${EC2_ROLE_NAME} 2>/dev/null || true
+safe_delete "Eliminar Instance Profile EC2" \
+  "aws iam delete-instance-profile --instance-profile-name ${EC2_INSTANCE_PROFILE}"
+aws iam detach-role-policy --role-name ${EC2_ROLE_NAME} \
+  --policy-arn arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess 2>/dev/null || true
+safe_delete "Eliminar IAM role EC2" \
+  "aws iam delete-role --role-name ${EC2_ROLE_NAME}"
 
 # ============================================================
-# 6. DELETE RDS POSTGRES DATABASE
+# 7. RDS POSTGRES
 # ============================================================
-echo -e "\n${BLUE}===== Step 6: RDS Postgres Database =====${NC}"
-
-# Delete RDS instance
-echo "Deleting RDS Postgres instance..."
+echo -e "\n${BLUE}===== Step 7: RDS Postgres =====${NC}"
 aws rds delete-db-instance \
   --db-instance-identifier ${DB_INSTANCE_NAME} \
-  --skip-final-snapshot \
-  --delete-automated-backups \
-  --region ${AWS_REGION} 2>/dev/null && echo "Instance deletion initiated" || echo "Instance not found"
-
-# Wait for instance deletion (with timeout)
-echo "Waiting for instance deletion (max 10 minutes)..."
+  --skip-final-snapshot --delete-automated-backups \
+  --region ${AWS_REGION} 2>/dev/null && echo "RDS deletion initiated" || echo "RDS no encontrado"
+echo "Esperando eliminación RDS (máx 10 min)..."
 timeout 600 aws rds wait db-instance-deleted \
-  --db-instance-identifier ${DB_INSTANCE_NAME} \
-  --region ${AWS_REGION} 2>/dev/null || echo "Timeout or instance already deleted"
-
-echo -e "${GREEN}✓ RDS Postgres deleted${NC}"
+  --db-instance-identifier ${DB_INSTANCE_NAME} --region ${AWS_REGION} 2>/dev/null || true
+echo -e "${GREEN}✓ RDS eliminado${NC}"
 
 # ============================================================
-# 7. DELETE DB SUBNET GROUP
+# 8. DB SUBNET GROUP
 # ============================================================
-echo -e "\n${BLUE}===== Step 7: DB Subnet Group =====${NC}"
-
-safe_delete "Deleting DB subnet group" \
+echo -e "\n${BLUE}===== Step 8: DB Subnet Group =====${NC}"
+safe_delete "Eliminar DB subnet group" \
     "aws rds delete-db-subnet-group --db-subnet-group-name ${PROJECT_NAME}-subnet-group --region ${AWS_REGION}"
 
 # ============================================================
-# 8. DELETE SECURITY GROUP
+# 9. SECURITY GROUP DB + LAMBDA
 # ============================================================
-echo -e "\n${BLUE}===== Step 8: Security Group =====${NC}"
-
+echo -e "\n${BLUE}===== Step 9: Security Group DB =====${NC}"
 SG_ID=$(aws ec2 describe-security-groups \
   --filters "Name=group-name,Values=${PROJECT_NAME}-aurora-sg" \
-  --query 'SecurityGroups[0].GroupId' \
-  --output text \
-  --region ${AWS_REGION} 2>/dev/null || echo "")
+  --query 'SecurityGroups[0].GroupId' --output text --region ${AWS_REGION} 2>/dev/null)
 
 if [ ! -z "$SG_ID" ] && [ "$SG_ID" != "None" ]; then
-  echo "Found security group: ${SG_ID}"
-  
-  # Revoke all ingress rules first
-  echo "Revoking security group rules..."
-  aws ec2 describe-security-groups --group-ids ${SG_ID} --region ${AWS_REGION} \
-    --query 'SecurityGroups[0].IpPermissions' --output json > /tmp/sg_rules.json 2>/dev/null
-  
-  if [ -s /tmp/sg_rules.json ] && [ "$(cat /tmp/sg_rules.json)" != "[]" ]; then
-    aws ec2 revoke-security-group-ingress \
-      --group-id ${SG_ID} \
-      --ip-permissions file:///tmp/sg_rules.json \
-      --region ${AWS_REGION} 2>/dev/null || echo "No rules to revoke"
+  RULES=$(aws ec2 describe-security-groups --group-ids ${SG_ID} --region ${AWS_REGION} \
+    --query 'SecurityGroups[0].IpPermissions' --output json 2>/dev/null)
+  if [ "$RULES" != "[]" ] && [ ! -z "$RULES" ]; then
+    echo "$RULES" > /tmp/sg_rules.json
+    aws ec2 revoke-security-group-ingress --group-id ${SG_ID} \
+      --ip-permissions file:///tmp/sg_rules.json --region ${AWS_REGION} 2>/dev/null || true
   fi
-  
-  # Try to delete (might fail if ENIs still attached)
   for i in {1..5}; do
-    if aws ec2 delete-security-group --group-id ${SG_ID} --region ${AWS_REGION} 2>/dev/null; then
-      echo -e "${GREEN}✓ Security group deleted${NC}"
-      break
-    else
-      if [ $i -lt 5 ]; then
-        echo -e "${YELLOW}Security group still has dependencies, retrying in 15s... (attempt $i/5)${NC}"
-        sleep 15
-      else
-        echo -e "${RED}✗ Failed to delete security group ${SG_ID}${NC}"
-        echo -e "${YELLOW}You may need to manually delete it after all ENIs are removed${NC}"
-      fi
-    fi
+    aws ec2 delete-security-group --group-id ${SG_ID} --region ${AWS_REGION} 2>/dev/null && \
+      echo -e "${GREEN}✓ DB Security Group eliminado${NC}" && break || \
+      { [ $i -lt 5 ] && echo -e "${YELLOW}Reintentando en 15s... ($i/5)${NC}" && sleep 15; }
   done
 else
-  echo -e "${YELLOW}⚠ Security group not found${NC}"
+  echo -e "${YELLOW}⚠ DB Security Group no encontrado${NC}"
 fi
 
 # ============================================================
-# 9. DELETE IAM ROLE
+# 10. IAM ROLE LAMBDA
 # ============================================================
-echo -e "\n${BLUE}===== Step 9: IAM Role =====${NC}"
-
+echo -e "\n${BLUE}===== Step 10: IAM Role Lambda =====${NC}"
 ROLE_NAME="${PROJECT_NAME}-lambda-role"
-
-# List and detach all managed policies
-echo "Detaching managed policies..."
-ATTACHED_POLICIES=$(aws iam list-attached-role-policies \
-  --role-name ${ROLE_NAME} \
-  --query 'AttachedPolicies[*].PolicyArn' \
-  --output text 2>/dev/null || echo "")
-
-if [ ! -z "$ATTACHED_POLICIES" ]; then
-  for policy in $ATTACHED_POLICIES; do
-    aws iam detach-role-policy \
-      --role-name ${ROLE_NAME} \
-      --policy-arn $policy 2>/dev/null && echo "  Detached $policy" || true
-  done
-fi
-
-# List and delete all inline policies
-echo "Deleting inline policies..."
-INLINE_POLICIES=$(aws iam list-role-policies \
-  --role-name ${ROLE_NAME} \
-  --query 'PolicyNames' \
-  --output text 2>/dev/null || echo "")
-
-if [ ! -z "$INLINE_POLICIES" ]; then
-  for policy in $INLINE_POLICIES; do
-    aws iam delete-role-policy \
-      --role-name ${ROLE_NAME} \
-      --policy-name $policy 2>/dev/null && echo "  Deleted inline policy $policy" || true
-  done
-fi
-
-# Delete the role
-safe_delete "Deleting IAM role" \
-    "aws iam delete-role --role-name ${ROLE_NAME}"
+ATTACHED=$(aws iam list-attached-role-policies --role-name ${ROLE_NAME} \
+  --query 'AttachedPolicies[*].PolicyArn' --output text 2>/dev/null)
+for p in $ATTACHED; do
+  aws iam detach-role-policy --role-name ${ROLE_NAME} --policy-arn $p 2>/dev/null || true
+done
+INLINE=$(aws iam list-role-policies --role-name ${ROLE_NAME} \
+  --query 'PolicyNames' --output text 2>/dev/null)
+for p in $INLINE; do
+  aws iam delete-role-policy --role-name ${ROLE_NAME} --policy-name $p 2>/dev/null || true
+done
+safe_delete "Eliminar IAM role Lambda" "aws iam delete-role --role-name ${ROLE_NAME}"
 
 # ============================================================
-# 10. CLEAN UP LOCAL FILES
+# 11. ARCHIVOS LOCALES
 # ============================================================
-echo -e "\n${BLUE}===== Step 10: Local Files =====${NC}"
-
-# Files created by deploy_rag.sh
-rm -f .rag-deployment-config && echo "✓ Deleted .rag-deployment-config" || true
-rm -f lambda-role-trust.json && echo "✓ Deleted lambda-role-trust.json" || true
-rm -f lambda-vpc-policy.json && echo "✓ Deleted lambda-vpc-policy.json" || true
-rm -f s3-notification.json && echo "✓ Deleted s3-notification.json" || true
-rm -f test_document.txt && echo "✓ Deleted test_document.txt" || true
-
-# Temporary files
-rm -f /tmp/sg_rules.json 2>/dev/null || true
-
-# Optional: Remove helper scripts (comment out if you want to keep them)
-# rm -f init_schema.ps1 && echo "✓ Deleted init_schema.ps1" || true
-# rm -f init_schema_helper.sh && echo "✓ Deleted init_schema_helper.sh" || true
-# rm -f check_db_tools.sh && echo "✓ Deleted check_db_tools.sh" || true
-
-echo -e "${GREEN}✓ Local files cleaned${NC}"
+echo -e "\n${BLUE}===== Step 11: Archivos locales =====${NC}"
+rm -f .rag-deployment-config lambda-role-trust.json lambda-vpc-policy.json \
+      s3-notification.json ec2-userdata.sh /tmp/sg_rules.json 2>/dev/null
+echo -e "${GREEN}✓ Archivos locales eliminados${NC}"
 
 # ============================================================
-# SUMMARY
+# RESUMEN
 # ============================================================
-echo -e "\n${GREEN}========================================${NC}"
-echo -e "${GREEN} CLEANUP COMPLETED${NC}"
+echo ""
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN} CLEANUP COMPLETADO${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
-echo -e "${GREEN}All RAG system resources have been deleted:${NC}"
-echo "  ✓ Lambda Functions (processor, query)"
-echo "  ✓ S3 Bucket and contents"
-echo "  ✓ ECR Docker repositories"
-echo "  ✓ RDS PostgreSQL database"
-echo "  ✓ VPC Security Groups"
-echo "  ✓ IAM Roles and policies"
-echo "  ✓ Local configuration files"
+echo -e "${GREEN}Recursos eliminados:${NC}"
+echo "  ✓ Lambda Processor"
+echo "  ✓ S3 Bucket y contenidos"
+echo "  ✓ ECR Repository"
+echo "  ✓ RDS PostgreSQL"
+echo "  ✓ EC2 Streamlit"
+echo "  ✓ Security Groups (DB + EC2)"
+echo "  ✓ IAM Roles (Lambda + EC2) y Instance Profile"
+echo "  ✓ Archivos locales"
 echo ""
-echo -e "${YELLOW}NOTE: Some resources may take a few minutes to fully delete.${NC}"
+echo -e "${YELLOW}Nota: Algunos recursos tardan unos minutos en eliminarse completamente.${NC}"
+echo -e "${YELLOW}Si algo falla, vuelve a ejecutar: ./clean_rag.sh${NC}"
 echo ""
-echo -e "${YELLOW}If any resources failed to delete:${NC}"
-echo "  1. Wait 5-10 minutes for AWS to finish cleanup"
-echo "  2. Run this script again: ./clean_rag.sh"
-echo "  3. Check AWS Console for orphaned resources:"
-echo "     - RDS → Databases"
-echo "     - EC2 → Security Groups"
-echo "     - EC2 → Network Interfaces (ENIs)"
-echo "     - Lambda → Functions"
-echo "     - S3 → Buckets"
-echo ""
-echo -e "${BLUE}To redeploy the system:${NC}"
-echo "  ./deploy_rag.sh"
-echo ""
+echo -e "${BLUE}Para redesplegar: ./deploy_rag.sh${NC}"
