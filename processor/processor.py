@@ -3,14 +3,19 @@ import boto3
 import hashlib
 import os
 import io
+import time
 import psycopg2
 from psycopg2.extras import execute_values
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from botocore.exceptions import ClientError
 import PyPDF2
 import docx
 
+# Lambda provides AWS_REGION automatically via AWS_DEFAULT_REGION
+REGION = os.environ.get('AWS_DEFAULT_REGION', 'eu-west-1')
+
 s3 = boto3.client('s3')
-bedrock = boto3.client('bedrock-runtime', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
+bedrock = boto3.client('bedrock-runtime', region_name=REGION)
 
 # Database connection parameters from environment
 DB_HOST = os.environ['DB_HOST']
@@ -62,21 +67,46 @@ def extract_docx(file_obj):
     return text
 
 
-def get_embedding(text):
-    """Generate embedding using Bedrock Titan Embeddings"""
+def get_embedding(text, max_retries=5):
+    """Generate embedding using Cohere Embed Multilingual with retry and rate limiting"""
+    
+    # Truncate text if too long (Cohere max is ~2048 tokens, be safe with ~4000 chars)
+    if len(text) > 4000:
+        text = text[:4000]
+    
     body = json.dumps({
-        "inputText": text
+        "texts": [text],
+        "input_type": "search_document",
+        "truncate": "END"
     })
     
-    response = bedrock.invoke_model(
-        modelId='amazon.titan-embed-text-v2:0',
-        body=body,
-        contentType='application/json',
-        accept='application/json'
-    )
-    
-    response_body = json.loads(response['body'].read())
-    return response_body['embedding']
+    for attempt in range(max_retries):
+        try:
+            response = bedrock.invoke_model(
+                modelId='cohere.embed-multilingual-v3',
+                body=body,
+                contentType='application/json',
+                accept='application/json'
+            )
+            
+            response_body = json.loads(response['body'].read())
+            return response_body['embeddings'][0]
+            
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', '')
+            
+            if error_code == 'ThrottlingException':
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 2, 4, 8, 16 seconds
+                    wait_time = 2 ** (attempt + 1)
+                    print(f"Throttled. Waiting {wait_time}s before retry {attempt + 1}/{max_retries}")
+                    time.sleep(wait_time)
+                else:
+                    print(f"Max retries reached for embedding generation")
+                    raise
+            else:
+                # For other errors, raise immediately
+                raise
 
 
 def chunk_text(text, chunk_size=1000, chunk_overlap=200):
@@ -145,7 +175,7 @@ def lambda_handler(event, context):
         for i, chunk in enumerate(chunks):
             print(f"Processing chunk {i+1}/{len(chunks)}")
             
-            # Generate embedding
+            # Generate embedding with retry logic
             embedding = get_embedding(chunk)
             
             # Prepare data for batch insert
@@ -156,6 +186,12 @@ def lambda_handler(event, context):
                 i,
                 file_hash
             ))
+            
+            # Add delay between requests to avoid throttling (except for last chunk)
+            # Increased to 3 seconds for better rate limiting
+            if i < len(chunks) - 1:
+                print(f"  Waiting 3s before next chunk...")
+                time.sleep(3)
         
         # Delete old chunks if file was re-uploaded
         cursor.execute("DELETE FROM embeddings WHERE filename = %s", (key,))

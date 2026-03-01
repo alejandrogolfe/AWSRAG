@@ -4,7 +4,10 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-bedrock = boto3.client('bedrock-runtime', region_name=os.environ.get('AWS_REGION', 'us-east-1'))
+# Lambda provides AWS_REGION automatically via AWS_DEFAULT_REGION
+REGION = os.environ.get('AWS_DEFAULT_REGION', 'eu-west-1')
+
+bedrock = boto3.client('bedrock-runtime', region_name=REGION)
 
 # Database connection parameters from environment
 DB_HOST = os.environ['DB_HOST']
